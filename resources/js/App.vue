@@ -23,6 +23,8 @@ const priority = ref('');
 const sortBy = ref('created_at');
 const sortDirection = ref('desc');
 const showModal = ref(false);
+const showDeleteModal = ref(false);
+const deletingProject = ref(null);
 const showColumns = ref(false);
 const editingProject = ref(null);
 const toast = ref(null);
@@ -238,10 +240,22 @@ async function saveProject() {
 }
 
 async function removeProject(project) {
-  if (!window.confirm(`Delete “${project.project_name}”?`)) return;
-  const response = await fetch(`/api/projects/${project.id}`, {method: 'DELETE', headers: jsonHeaders()});
+  deletingProject.value = project;
+  showDeleteModal.value = true;
+}
+
+async function confirmDelete() {
+  if (!deletingProject.value) return;
+
+  const response = await fetch(`/api/projects/${deletingProject.value.id}`, {method: 'DELETE', headers: jsonHeaders()});
   const body = await response.json();
-  if (!response.ok) return notify(body.message || 'Unable to delete project.', 'error');
+  if (!response.ok) {
+    showDeleteModal.value = false;
+    return notify(body.message || 'Unable to delete project.', 'error');
+  }
+
+  showDeleteModal.value = false;
+  deletingProject.value = null;
   notify('Project removed.');
   await loadProjects();
 }
@@ -323,7 +337,10 @@ onMounted(async () => {
             <p class="text-xs uppercase tracking-[0.25em] text-caramel">Project pantry</p></div>
         </div>
         <div class="flex items-center gap-3">
-          <button class="text-sm font-semibold text-stone-600" @click="activePage = 'profile'">{{ user.name }}</button>
+          <button class="rounded-full border border-[#eadfce] px-4 py-2.5 text-sm font-semibold text-stone-600 hover:bg-white"
+                  @click="activePage = 'profile'">
+            Profile
+          </button>
           <button
             class="rounded-full border border-[#eadfce] px-4 py-2.5 text-sm font-semibold text-stone-600 hover:bg-white"
             @click="logout">Log out
@@ -541,6 +558,26 @@ onMounted(async () => {
           </button>
         </div>
       </form>
+    </div>
+    <div v-if="showDeleteModal" class="fixed inset-0 z-30 grid place-items-center bg-cocoa/30 p-4 backdrop-blur-sm"
+         @click.self="showDeleteModal = false">
+      <div class="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+        <div class="mb-5 flex items-start justify-between">
+          <div><p class="text-sm font-semibold uppercase tracking-widest text-[#b85e50]">A bittersweet goodbye</p>
+            <h2 class="mt-1 font-serif text-3xl font-bold">Delete project?</h2>
+          </div>
+          <button type="button" class="rounded-full bg-[#fffaf0] px-3 py-1 text-xl text-stone-500"
+                  @click="showDeleteModal = false">×</button>
+        </div>
+        <p class="text-sm leading-6 text-stone-600">You are about to remove
+          <strong>{{ deletingProject?.project_name }}</strong>. This action cannot be undone.</p>
+        <div class="mt-7 flex justify-end gap-3">
+          <button type="button" class="rounded-full px-5 py-2.5 text-sm font-semibold text-stone-500 hover:bg-[#fffaf0]"
+                  @click="showDeleteModal = false">Keep project</button>
+          <button type="button" class="rounded-full bg-[#b85e50] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#9f4d42]"
+                  @click="confirmDelete">Delete project</button>
+        </div>
+      </div>
     </div>
     <Transition name="toast">
       <div v-if="toast"
