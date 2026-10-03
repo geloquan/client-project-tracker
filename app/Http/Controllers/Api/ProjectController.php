@@ -8,7 +8,6 @@ use App\Http\Requests\UpdateProjectRequest;
 use App\Http\Resources\ProjectResource;
 use App\Http\Responses\JsonResponse;
 use App\Models\Project;
-use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse as LaravelJsonResponse;
 use Illuminate\Http\Request;
@@ -54,15 +53,9 @@ class ProjectController extends Controller
 
   public function store(StoreProjectRequest $request): LaravelJsonResponse
   {
-    $userId = auth()->id() ?? User::query()->value('id');
-
-    if ($userId === null) {
-      return JsonResponse::error('A user is required to create a project.', 422);
-    }
-
     $project = Project::create(array_merge(
       $this->statusAttributes($request->validated()),
-      ['created_by' => $userId],
+      ['created_by' => auth()->id()],
     ));
 
     return JsonResponse::success(new ProjectResource($project), 'Project created successfully.', 201);
@@ -81,7 +74,7 @@ class ProjectController extends Controller
       $attributes = array_merge($attributes, $this->statusAttributes($attributes));
     }
 
-    $attributes['updated_by'] = auth()->id() ?? $project->updated_by;
+    $attributes['updated_by'] = auth()->id();
     $project->update($attributes);
 
     return JsonResponse::success(new ProjectResource($project->refresh()), 'Project updated successfully.');
