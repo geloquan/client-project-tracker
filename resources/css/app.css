@@ -6,4 +6,31 @@
 @theme {
     --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
         'Segoe UI Symbol', 'Noto Color Emoji';
+    --color-cream: #fffaf0;
+    --color-cocoa: #40332c;
+    --color-caramel: #c88754;
+}
+
+@layer base {
+    body {
+        @apply bg-cream text-cocoa antialiased;
+        background-image: radial-gradient(#eadfce 0.7px, transparent 0.7px);
+        background-size: 18px 18px;
+    }
+}
+
+@layer components {
+    .field {
+        @apply flex flex-col gap-1.5 text-sm font-semibold text-stone-600;
+    }
+
+    .field input,
+    .field select,
+    .field textarea {
+        @apply rounded-xl border border-[#eadfce] bg-[#fffaf0] px-3 py-2.5 font-normal outline-none focus:ring-2 focus:ring-caramel/30;
+    }
+
+    .field small {
+        @apply font-normal text-[#b85e50];
+    }
 }
