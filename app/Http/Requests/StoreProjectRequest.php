@@ -3,7 +3,6 @@
 namespace App\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Validation\Rule;
 
 class StoreProjectRequest extends FormRequest
 {
@@ -37,12 +36,8 @@ class StoreProjectRequest extends FormRequest
             'client_name' => ['required', 'string', 'max:255'],
             'project_name' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
-            'planned_at' => ['required', 'date', 'after_or_equal:in_progress_at'],
-            'in_progress_at' => ['nullable', 'date'],
-            'on_hold_at' => ['nullable', 'date'],
-            'completed_at' => ['nullable', 'date'],
-            'status' => ['sometimes', Rule::in(['planned', 'in_progress', 'on_hold', 'completed'])],
-            'priority' => ['required', Rule::in(['low', 'medium', 'high'])],
+            'planned_at' => ['required', 'date', 'after_or_equal:today'],
+            'priority' => ['required', 'in:low,medium,high'],
         ];
     }
 }

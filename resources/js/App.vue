@@ -7,6 +7,7 @@ const loginForm = ref({email: '', password: ''});
 const loginErrors = ref({});
 const loginSaving = ref(false);
 const activePage = ref('projects');
+const selectedProject = ref(null);
 const profileForm = ref({name: ''});
 const passwordForm = ref({current_password: '', password: '', password_confirmation: ''});
 const profileErrors = ref({});
@@ -25,6 +26,8 @@ const sortDirection = ref('desc');
 const showModal = ref(false);
 const showDeleteModal = ref(false);
 const deletingProject = ref(null);
+const deletePassword = ref('');
+const deleteErrors = ref({});
 const showColumns = ref(false);
 const editingProject = ref(null);
 const toast = ref(null);
@@ -37,7 +40,7 @@ const emptyForm = () => ({
   description: '',
   planned_at: '',
   in_progress_at: '',
-  status: 'planned',
+  status: 'in_progress',
   priority: 'medium',
 });
 const form = ref(emptyForm());
@@ -186,6 +189,14 @@ function openCreate() {
   showModal.value = true;
 }
 
+function openProject(project) {
+  selectedProject.value = project;
+}
+
+function closeProject() {
+  selectedProject.value = null;
+}
+
 function openEdit(project) {
   editingProject.value = project;
   form.value = {
@@ -194,7 +205,7 @@ function openEdit(project) {
     description: project.description ?? '',
     planned_at: toInputDate(project.planned_at),
     in_progress_at: toInputDate(project.in_progress_at),
-    status: project.status ?? 'planned',
+    status: project.status ?? 'in_progress',
     priority: project.priority ?? 'medium',
   };
   errors.value = {};
@@ -215,7 +226,7 @@ async function saveProject() {
   const payload = {
     ...form.value,
     planned_at: apiDate(form.value.planned_at),
-    in_progress_at: form.value.status === 'planned' ? null : apiDate(form.value.in_progress_at),
+    in_progress_at: undefined,
   };
   const url = editingProject.value ? `/api/projects/${editingProject.value.id}` : '/api/projects';
   try {
@@ -241,21 +252,44 @@ async function saveProject() {
 
 async function removeProject(project) {
   deletingProject.value = project;
+  deletePassword.value = '';
+  deleteErrors.value = {};
   showDeleteModal.value = true;
 }
 
 async function confirmDelete() {
   if (!deletingProject.value) return;
 
-  const response = await fetch(`/api/projects/${deletingProject.value.id}`, {method: 'DELETE', headers: jsonHeaders()});
+  const response = await fetch(`/api/projects/${deletingProject.value.id}`, {
+    method: 'DELETE',
+    headers: jsonHeaders(),
+    body: JSON.stringify({password: deletePassword.value}),
+  });
   const body = await response.json();
   if (!response.ok) {
-    showDeleteModal.value = false;
+    deleteErrors.value = body.errors ?? {};
     return notify(body.message || 'Unable to delete project.', 'error');
+  }
+
+  async function transitionProject(action) {
+    if (!selectedProject.value) return;
+
+    const response = await fetch(`/api/projects/${selectedProject.value.id}/transition`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({action}),
+    });
+    const body = await response.json();
+    if (!response.ok) return notify(body.message || 'Unable to update project status.', 'error');
+
+    selectedProject.value = body.data;
+    notify(body.message || 'Project status updated.');
+    await loadProjects();
   }
 
   showDeleteModal.value = false;
   deletingProject.value = null;
+  deletePassword.value = '';
   notify('Project removed.');
   await loadProjects();
 }
@@ -353,7 +387,7 @@ onMounted(async () => {
       </div>
     </header>
 
-    <main v-if="activePage === 'projects'" class="mx-auto max-w-7xl px-5 py-8 lg:px-8">
+    <main v-if="activePage === 'projects' && !selectedProject" class="mx-auto max-w-7xl px-5 py-8 lg:px-8">
       <div class="mb-8"><p class="mb-2 text-sm font-semibold uppercase tracking-[0.25em] text-caramel">Today’s scoop</p>
         <h1 class="font-serif text-4xl font-bold tracking-tight md:text-5xl">Projects</h1>
         <p class="mt-2 max-w-xl text-stone-500">A sweet, simple place to keep every project moving.</p></div>
@@ -434,7 +468,7 @@ onMounted(async () => {
             <tr v-for="project in displayedProjects" v-else :key="project.id"
                 class="group transition hover:bg-[#fffaf0]/70">
               <td v-if="isVisible('client_name')" class="px-5 py-4 font-semibold">{{ project.client_name }}</td>
-              <td v-if="isVisible('project_name')" class="px-5 py-4 text-stone-600">{{ project.project_name }}</td>
+              <td v-if="isVisible('project_name')" class="px-5 py-4 text-stone-600"><button class="font-semibold text-caramel hover:underline" @click="openProject(project)">{{ project.project_name }}</button></td>
               <td v-if="isVisible('status')" class="px-5 py-4"><span
                 class="rounded-full px-3 py-1 text-xs font-semibold capitalize"
                 :class="statusClass(project.status)">{{ project.status.replace('_', ' ') }}</span></td>
@@ -479,7 +513,7 @@ onMounted(async () => {
       </div>
     </main>
 
-    <main v-else class="mx-auto max-w-3xl px-5 py-8 lg:px-8">
+    <main v-else-if="activePage === 'profile'" class="mx-auto max-w-3xl px-5 py-8 lg:px-8">
       <button class="mb-6 text-sm font-semibold text-caramel" @click="activePage = 'projects'">← Back to projects
       </button>
       <div class="mb-8"><p class="mb-2 text-sm font-semibold uppercase tracking-[0.25em] text-caramel">Your account</p>
@@ -514,6 +548,44 @@ onMounted(async () => {
       </div>
     </main>
 
+    <main v-else class="mx-auto max-w-4xl px-5 py-8 lg:px-8">
+      <button class="mb-6 text-sm font-semibold text-caramel" @click="closeProject">← Back to projects</button>
+      <div class="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+        <div><p class="mb-2 text-sm font-semibold uppercase tracking-[0.25em] text-caramel">Project details</p>
+          <h1 class="font-serif text-4xl font-bold">{{ selectedProject.project_name }}</h1>
+          <p class="mt-2 text-stone-500">{{ selectedProject.client_name }} · {{ selectedProject.priority }} priority</p>
+        </div>
+        <div class="flex gap-2">
+          <button v-if="selectedProject.status === 'in_progress'" class="rounded-full border border-[#eadfce] px-4 py-2.5 text-sm font-semibold text-stone-600 hover:bg-white" @click="transitionProject('on_hold')">Put on hold</button>
+          <button v-if="selectedProject.status !== 'completed'" class="rounded-full bg-caramel px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#b57244]" @click="transitionProject('complete')">Mark complete</button>
+        </div>
+      </div>
+      <div class="grid gap-6 md:grid-cols-[1fr_2fr]">
+        <div class="rounded-3xl border border-[#eadfce] bg-white/90 p-6 shadow-[0_10px_40px_rgba(155,115,77,0.08)]">
+          <p class="mb-2 text-xs font-semibold uppercase tracking-widest text-stone-400">Current status</p>
+          <span class="rounded-full px-3 py-1 text-sm font-semibold capitalize" :class="statusClass(selectedProject.status)">{{ selectedProject.status.replace('_', ' ') }}</span>
+          <p class="mt-6 text-sm leading-6 text-stone-600">{{ selectedProject.description || 'No description added yet.' }}</p>
+          <p class="mt-6 text-xs font-semibold uppercase tracking-widest text-stone-400">Due date</p>
+          <p class="mt-1 font-semibold">{{ formatDate(selectedProject.planned_at) }}</p>
+        </div>
+        <div class="rounded-3xl border border-[#eadfce] bg-white/90 p-6 shadow-[0_10px_40px_rgba(155,115,77,0.08)]">
+          <p class="mb-6 font-serif text-2xl font-bold">Project timeline</p>
+          <div class="relative ml-3 border-l-2 border-[#eadfce] pl-7">
+            <div v-for="event in [
+              {label: 'Created', value: selectedProject.created_at, tone: 'bg-caramel'},
+              {label: 'In progress', value: selectedProject.in_progress_at, tone: 'bg-[#397258]'},
+              {label: 'On hold', value: selectedProject.on_hold_at, tone: 'bg-[#b85e50]'},
+              {label: 'Completed', value: selectedProject.completed_at, tone: 'bg-[#5e5686]'}
+            ].filter((event) => event.value)" :key="event.label" class="relative mb-7 last:mb-0">
+              <span class="absolute -left-[2.15rem] top-1 h-3 w-3 rounded-full ring-4 ring-white" :class="event.tone"></span>
+              <p class="font-semibold">{{ event.label }}</p>
+              <p class="mt-1 text-sm text-stone-500">{{ formatDate(event.value) }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
     <div v-if="showModal" class="fixed inset-0 z-20 grid place-items-center bg-cocoa/30 p-4 backdrop-blur-sm"
          @click.self="showModal = false">
       <form class="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl"
@@ -532,19 +604,11 @@ onMounted(async () => {
                                                                                       placeholder="e.g. Acme Co."/><small
           v-if="errors.client_name">{{ errors.client_name[0] }}</small></label><label class="field">Project name<input
           v-model="form.project_name" required placeholder="e.g. Summer website"/><small
-          v-if="errors.project_name">{{ errors.project_name[0] }}</small></label><label class="field">Status<select
-          v-model="form.status">
-          <option value="planned">Planned</option>
-          <option value="in_progress">In progress</option>
-          <option value="on_hold">On hold</option>
-          <option value="completed">Completed</option>
-        </select></label><label class="field">Priority<select v-model="form.priority" required>
+          v-if="errors.project_name">{{ errors.project_name[0] }}</small></label><label class="field">Priority<select v-model="form.priority" required>
           <option value="high">High</option>
           <option value="medium">Medium</option>
           <option value="low">Low</option>
-        </select><small v-if="errors.priority">{{ errors.priority[0] }}</small></label><label class="field">Start
-          date<input v-model="form.in_progress_at" type="date" :required="form.status !== 'planned'"/><small
-            v-if="errors.in_progress_at">{{ errors.in_progress_at[0] }}</small></label><label class="field">Due
+        </select><small v-if="errors.priority">{{ errors.priority[0] }}</small></label><label class="field">Due
           date<input v-model="form.planned_at" type="date" required/><small
             v-if="errors.planned_at">{{ errors.planned_at[0] }}</small></label><label class="field sm:col-span-2">Description<textarea
           v-model="form.description" rows="3" placeholder="What are we making?"></textarea></label></div>
@@ -571,6 +635,10 @@ onMounted(async () => {
         </div>
         <p class="text-sm leading-6 text-stone-600">You are about to remove
           <strong>{{ deletingProject?.project_name }}</strong>. This action cannot be undone.</p>
+        <label class="field mt-5">Enter your password to confirm
+          <input v-model="deletePassword" type="password" required autocomplete="current-password"/>
+          <small v-if="deleteErrors.password">{{ deleteErrors.password[0] }}</small>
+        </label>
         <div class="mt-7 flex justify-end gap-3">
           <button type="button" class="rounded-full px-5 py-2.5 text-sm font-semibold text-stone-500 hover:bg-[#fffaf0]"
                   @click="showDeleteModal = false">Keep project</button>
