@@ -14,7 +14,8 @@ class TransitionProjectRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'action' => ['required', 'in:on_hold,complete'],
+            'action' => ['required', 'in:in_progress,on_hold,un_hold,complete'],
+            'password' => ['required', 'current_password'],
         ];
     }
 }

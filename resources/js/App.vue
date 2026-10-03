@@ -1,5 +1,5 @@
 <script setup>
-import {computed, onMounted, ref, watch} from 'vue';
+import {computed, onBeforeUnmount, onMounted, ref, watch} from 'vue';
 
 const user = ref(null);
 const authLoading = ref(true);
@@ -24,10 +24,17 @@ const priority = ref('');
 const sortBy = ref('created_at');
 const sortDirection = ref('desc');
 const showModal = ref(false);
+const showProjectModal = ref(false);
+const showLogoutModal = ref(false);
+const showTransitionModal = ref(false);
 const showDeleteModal = ref(false);
 const deletingProject = ref(null);
 const deletePassword = ref('');
 const deleteErrors = ref({});
+const transitionAction = ref('');
+const transitionPassword = ref('');
+const transitionErrors = ref({});
+const transitionSaving = ref(false);
 const showColumns = ref(false);
 const editingProject = ref(null);
 const toast = ref(null);
@@ -94,17 +101,12 @@ async function login() {
     user.value = body.data;
     profileForm.value.name = user.value.name;
     await loadProjects();
+    await restoreUiFromUrl();
   } catch (error) {
     notify(error.message, 'error');
   } finally {
     loginSaving.value = false;
   }
-}
-
-async function logout() {
-  await fetch('/api/logout', {method: 'POST', headers: jsonHeaders()});
-  user.value = null;
-  activePage.value = 'projects';
 }
 
 async function updateName() {
@@ -191,10 +193,60 @@ function openCreate() {
 
 function openProject(project) {
   selectedProject.value = project;
+  activePage.value = 'projects';
+  showProjectModal.value = true;
+  updateUrl();
 }
 
 function closeProject() {
   selectedProject.value = null;
+  showProjectModal.value = false;
+  updateUrl();
+}
+
+function updateUrl(replace = false) {
+  const params = new URLSearchParams(window.location.search);
+  params.delete('view');
+  params.delete('project');
+  params.delete('timeline');
+
+  if (activePage.value === 'profile') {
+    params.set('view', 'profile');
+  } else if (selectedProject.value) {
+    params.set('project', selectedProject.value.id);
+  }
+
+  const query = params.toString();
+  const url = `${window.location.pathname}${query ? `?${query}` : ''}`;
+  window.history[replace ? 'replaceState' : 'pushState']({}, '', url);
+}
+
+async function restoreUiFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('view') === 'profile') {
+    activePage.value = 'profile';
+    return;
+  }
+
+  const projectId = Number(params.get('project'));
+  if (!projectId) return;
+
+  const response = await fetch(`/api/projects/${projectId}`, {headers: {Accept: 'application/json'}});
+  if (!response.ok) {
+    updateUrl(true);
+    return;
+  }
+
+  const body = await response.json();
+  selectedProject.value = body.data;
+  showProjectModal.value = true;
+}
+
+function handlePopState() {
+  activePage.value = 'projects';
+  selectedProject.value = null;
+  showProjectModal.value = false;
+  restoreUiFromUrl().catch((error) => notify(error.message, 'error'));
 }
 
 function openEdit(project) {
@@ -271,27 +323,63 @@ async function confirmDelete() {
     return notify(body.message || 'Unable to delete project.', 'error');
   }
 
-  async function transitionProject(action) {
-    if (!selectedProject.value) return;
-
-    const response = await fetch(`/api/projects/${selectedProject.value.id}/transition`, {
-      method: 'POST',
-      headers: jsonHeaders(),
-      body: JSON.stringify({action}),
-    });
-    const body = await response.json();
-    if (!response.ok) return notify(body.message || 'Unable to update project status.', 'error');
-
-    selectedProject.value = body.data;
-    notify(body.message || 'Project status updated.');
-    await loadProjects();
-  }
-
   showDeleteModal.value = false;
   deletingProject.value = null;
   deletePassword.value = '';
   notify('Project removed.');
   await loadProjects();
+}
+
+async function transitionProject(action) {
+  if (!selectedProject.value) return;
+
+  transitionAction.value = action;
+  transitionPassword.value = '';
+  transitionErrors.value = {};
+  showTransitionModal.value = true;
+}
+
+async function confirmTransition() {
+  if (!selectedProject.value) return;
+
+  transitionSaving.value = true;
+  transitionErrors.value = {};
+  const response = await fetch(`/api/projects/${selectedProject.value.id}/transition`, {
+    method: 'POST',
+    headers: jsonHeaders(),
+    body: JSON.stringify({
+      action: transitionAction.value,
+      password: transitionPassword.value,
+    }),
+  });
+  const body = await response.json();
+  if (!response.ok) {
+    transitionErrors.value = body.errors ?? {};
+    notify(body.message || 'Unable to update project status.', 'error');
+    transitionSaving.value = false;
+    return;
+  }
+
+  selectedProject.value = body.data;
+  showTransitionModal.value = false;
+  transitionPassword.value = '';
+  notify(body.message || 'Project status updated.');
+  await loadProjects();
+  transitionSaving.value = false;
+}
+
+function requestLogout() {
+  showLogoutModal.value = true;
+}
+
+async function confirmLogout() {
+  await fetch('/api/logout', {method: 'POST', headers: jsonHeaders()});
+  showLogoutModal.value = false;
+  user.value = null;
+  activePage.value = 'projects';
+  selectedProject.value = null;
+  showProjectModal.value = false;
+  updateUrl(true);
 }
 
 function changePage(nextPage) {
@@ -332,11 +420,16 @@ watch([search, status, priority], () => {
 });
 onMounted(async () => {
   try {
-    if (await loadProfile()) await loadProjects();
+    if (await loadProfile()) {
+      await loadProjects();
+      await restoreUiFromUrl();
+      window.addEventListener('popstate', handlePopState);
+    }
   } finally {
     authLoading.value = false;
   }
 });
+onBeforeUnmount(() => window.removeEventListener('popstate', handlePopState));
 </script>
 
 <template>
@@ -372,12 +465,12 @@ onMounted(async () => {
         </div>
         <div class="flex items-center gap-3">
           <button class="rounded-full border border-[#eadfce] px-4 py-2.5 text-sm font-semibold text-stone-600 hover:bg-white"
-                  @click="activePage = 'profile'">
+                  @click="activePage = 'profile'; selectedProject = null; showProjectModal = false; updateUrl()">
             Profile
           </button>
           <button
             class="rounded-full border border-[#eadfce] px-4 py-2.5 text-sm font-semibold text-stone-600 hover:bg-white"
-            @click="logout">Log out
+            @click="requestLogout">Log out
           </button>
           <button v-if="activePage === 'projects'"
                   class="rounded-full bg-caramel px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#b57244]"
@@ -466,9 +559,9 @@ onMounted(async () => {
                 <p class="mt-1 text-sm text-stone-400">Try a different filter or add a new scoop.</p></td>
             </tr>
             <tr v-for="project in displayedProjects" v-else :key="project.id"
-                class="group transition hover:bg-[#fffaf0]/70">
+                class="group cursor-pointer transition hover:bg-[#fffaf0]/70" @click="openProject(project)">
               <td v-if="isVisible('client_name')" class="px-5 py-4 font-semibold">{{ project.client_name }}</td>
-              <td v-if="isVisible('project_name')" class="px-5 py-4 text-stone-600"><button class="font-semibold text-caramel hover:underline" @click="openProject(project)">{{ project.project_name }}</button></td>
+              <td v-if="isVisible('project_name')" class="px-5 py-4 text-stone-600"><button class="font-semibold text-caramel hover:underline" @click.stop="openProject(project)">{{ project.project_name }}</button></td>
               <td v-if="isVisible('status')" class="px-5 py-4"><span
                 class="rounded-full px-3 py-1 text-xs font-semibold capitalize"
                 :class="statusClass(project.status)">{{ project.status.replace('_', ' ') }}</span></td>
@@ -482,10 +575,10 @@ onMounted(async () => {
               </td>
               <td class="px-5 py-4 text-right">
                 <button class="mr-3 text-xs font-semibold text-caramel opacity-0 transition group-hover:opacity-100"
-                        @click="openEdit(project)">Edit
+                        @click.stop="openEdit(project)">Edit
                 </button>
                 <button class="text-xs font-semibold text-[#b85e50] opacity-0 transition group-hover:opacity-100"
-                        @click="removeProject(project)">Delete
+                        @click.stop="removeProject(project)">Delete
                 </button>
               </td>
             </tr>
@@ -514,7 +607,7 @@ onMounted(async () => {
     </main>
 
     <main v-else-if="activePage === 'profile'" class="mx-auto max-w-3xl px-5 py-8 lg:px-8">
-      <button class="mb-6 text-sm font-semibold text-caramel" @click="activePage = 'projects'">← Back to projects
+      <button class="mb-6 text-sm font-semibold text-caramel" @click="activePage = 'projects'; updateUrl()">← Back to projects
       </button>
       <div class="mb-8"><p class="mb-2 text-sm font-semibold uppercase tracking-[0.25em] text-caramel">Your account</p>
         <h1 class="font-serif text-4xl font-bold">Profile</h1>
@@ -548,43 +641,61 @@ onMounted(async () => {
       </div>
     </main>
 
-    <main v-else class="mx-auto max-w-4xl px-5 py-8 lg:px-8">
-      <button class="mb-6 text-sm font-semibold text-caramel" @click="closeProject">← Back to projects</button>
-      <div class="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-        <div><p class="mb-2 text-sm font-semibold uppercase tracking-[0.25em] text-caramel">Project details</p>
-          <h1 class="font-serif text-4xl font-bold">{{ selectedProject.project_name }}</h1>
-          <p class="mt-2 text-stone-500">{{ selectedProject.client_name }} · {{ selectedProject.priority }} priority</p>
+    <div v-if="showProjectModal && selectedProject"
+         class="fixed inset-0 z-20 grid place-items-center bg-cocoa/30 p-4 backdrop-blur-sm"
+         @click.self="closeProject">
+      <div class="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl">
+        <div class="mb-8 flex items-start justify-between gap-4">
+          <div>
+            <p class="mb-2 text-sm font-semibold uppercase tracking-[0.25em] text-caramel">Project details</p>
+            <h1 class="font-serif text-4xl font-bold">{{ selectedProject.project_name }}</h1>
+            <p class="mt-2 text-stone-500">{{ selectedProject.client_name }} · {{ selectedProject.priority }} priority</p>
+          </div>
+          <button type="button" class="rounded-full bg-[#fffaf0] px-3 py-1 text-xl text-stone-500"
+                  @click="closeProject">×</button>
         </div>
-        <div class="flex gap-2">
-          <button v-if="selectedProject.status === 'in_progress'" class="rounded-full border border-[#eadfce] px-4 py-2.5 text-sm font-semibold text-stone-600 hover:bg-white" @click="transitionProject('on_hold')">Put on hold</button>
-          <button v-if="selectedProject.status !== 'completed'" class="rounded-full bg-caramel px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#b57244]" @click="transitionProject('complete')">Mark complete</button>
+        <div class="mb-6 flex flex-wrap gap-2">
+          <button v-if="selectedProject.status === 'planned'"
+                  class="rounded-full bg-caramel px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#b57244]"
+                  @click="transitionProject('in_progress')">Start in progress</button>
+          <button v-if="selectedProject.status === 'planned' || selectedProject.status === 'in_progress'"
+                  class="rounded-full border border-[#eadfce] px-4 py-2.5 text-sm font-semibold text-stone-600 hover:bg-[#fffaf0]"
+                  @click="transitionProject('on_hold')">Put on hold</button>
+          <button v-if="selectedProject.status === 'in_progress'"
+                  class="rounded-full bg-caramel px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#b57244]"
+                  @click="transitionProject('complete')">Mark complete</button>
+          <button v-if="selectedProject.status === 'on_hold'"
+                  class="rounded-full bg-caramel px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#b57244]"
+                  @click="transitionProject('un_hold')">Un-hold project</button>
         </div>
-      </div>
-      <div class="grid gap-6 md:grid-cols-[1fr_2fr]">
-        <div class="rounded-3xl border border-[#eadfce] bg-white/90 p-6 shadow-[0_10px_40px_rgba(155,115,77,0.08)]">
-          <p class="mb-2 text-xs font-semibold uppercase tracking-widest text-stone-400">Current status</p>
-          <span class="rounded-full px-3 py-1 text-sm font-semibold capitalize" :class="statusClass(selectedProject.status)">{{ selectedProject.status.replace('_', ' ') }}</span>
-          <p class="mt-6 text-sm leading-6 text-stone-600">{{ selectedProject.description || 'No description added yet.' }}</p>
-          <p class="mt-6 text-xs font-semibold uppercase tracking-widest text-stone-400">Due date</p>
-          <p class="mt-1 font-semibold">{{ formatDate(selectedProject.planned_at) }}</p>
-        </div>
-        <div class="rounded-3xl border border-[#eadfce] bg-white/90 p-6 shadow-[0_10px_40px_rgba(155,115,77,0.08)]">
-          <p class="mb-6 font-serif text-2xl font-bold">Project timeline</p>
-          <div class="relative ml-3 border-l-2 border-[#eadfce] pl-7">
-            <div v-for="event in [
-              {label: 'Created', value: selectedProject.created_at, tone: 'bg-caramel'},
-              {label: 'In progress', value: selectedProject.in_progress_at, tone: 'bg-[#397258]'},
-              {label: 'On hold', value: selectedProject.on_hold_at, tone: 'bg-[#b85e50]'},
-              {label: 'Completed', value: selectedProject.completed_at, tone: 'bg-[#5e5686]'}
-            ].filter((event) => event.value)" :key="event.label" class="relative mb-7 last:mb-0">
-              <span class="absolute -left-[2.15rem] top-1 h-3 w-3 rounded-full ring-4 ring-white" :class="event.tone"></span>
-              <p class="font-semibold">{{ event.label }}</p>
-              <p class="mt-1 text-sm text-stone-500">{{ formatDate(event.value) }}</p>
+        <div class="grid gap-6 md:grid-cols-[1fr_2fr]">
+          <div class="rounded-3xl border border-[#eadfce] bg-[#fffaf0]/60 p-6">
+            <p class="mb-2 text-xs font-semibold uppercase tracking-widest text-stone-400">Current status</p>
+            <span class="rounded-full px-3 py-1 text-sm font-semibold capitalize"
+                  :class="statusClass(selectedProject.status)">{{ selectedProject.status.replace('_', ' ') }}</span>
+            <p class="mt-6 text-sm leading-6 text-stone-600">{{ selectedProject.description || 'No description added yet.' }}</p>
+            <p class="mt-6 text-xs font-semibold uppercase tracking-widest text-stone-400">Due date</p>
+            <p class="mt-1 font-semibold">{{ formatDate(selectedProject.planned_at) }}</p>
+          </div>
+          <div class="rounded-3xl border border-[#eadfce] bg-[#fffaf0]/60 p-6">
+            <p class="mb-6 font-serif text-2xl font-bold">Project timeline</p>
+            <div class="relative ml-3 border-l-2 border-[#eadfce] pl-7">
+              <div v-for="event in [
+                {label: 'Planned', value: selectedProject.planned_at, tone: 'bg-caramel'},
+                {label: 'In progress', value: selectedProject.in_progress_at, tone: 'bg-[#397258]'},
+                {label: 'On hold', value: selectedProject.on_hold_at, tone: 'bg-[#b85e50]'},
+                {label: 'Completed', value: selectedProject.completed_at, tone: 'bg-[#5e5686]'}
+              ].filter((event) => event.value)" :key="event.label" class="relative mb-7 last:mb-0">
+                <span class="absolute -left-[2.15rem] top-1 h-3 w-3 rounded-full ring-4 ring-white"
+                      :class="event.tone"></span>
+                <p class="font-semibold">{{ event.label }}</p>
+                <p class="mt-1 text-sm text-stone-500">{{ formatDate(event.value) }}</p>
+              </div>
             </div>
           </div>
         </div>
       </div>
-    </main>
+    </div>
 
     <div v-if="showModal" class="fixed inset-0 z-20 grid place-items-center bg-cocoa/30 p-4 backdrop-blur-sm"
          @click.self="showModal = false">
@@ -623,6 +734,34 @@ onMounted(async () => {
         </div>
       </form>
     </div>
+    <div v-if="showTransitionModal && selectedProject"
+         class="fixed inset-0 z-30 grid place-items-center bg-cocoa/30 p-4 backdrop-blur-sm"
+         @click.self="showTransitionModal = false">
+      <form class="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl" @submit.prevent="confirmTransition">
+        <div class="mb-6 flex items-start justify-between">
+          <div>
+            <p class="text-sm font-semibold uppercase tracking-widest text-caramel">Confirm project action</p>
+            <h2 class="mt-1 font-serif text-3xl font-bold">{{ transitionAction.replace('_', ' ') }}</h2>
+          </div>
+          <button type="button" class="rounded-full bg-[#fffaf0] px-3 py-1 text-xl text-stone-500"
+                  @click="showTransitionModal = false">×</button>
+        </div>
+        <p class="text-sm leading-6 text-stone-600">Enter your password to confirm this status change for
+          <strong>{{ selectedProject.project_name }}</strong>.</p>
+        <label class="field mt-5">Password
+          <input v-model="transitionPassword" type="password" required autocomplete="current-password"/>
+          <small v-if="transitionErrors.password">{{ transitionErrors.password[0] }}</small>
+        </label>
+        <div class="mt-7 flex justify-end gap-3">
+          <button type="button" class="rounded-full px-5 py-2.5 text-sm font-semibold text-stone-500 hover:bg-[#fffaf0]"
+                  @click="showTransitionModal = false">Cancel</button>
+          <button :disabled="transitionSaving"
+                  class="rounded-full bg-caramel px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50">
+            {{ transitionSaving ? 'Updating…' : 'Confirm action' }}
+          </button>
+        </div>
+      </form>
+    </div>
     <div v-if="showDeleteModal" class="fixed inset-0 z-30 grid place-items-center bg-cocoa/30 p-4 backdrop-blur-sm"
          @click.self="showDeleteModal = false">
       <div class="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
@@ -644,6 +783,26 @@ onMounted(async () => {
                   @click="showDeleteModal = false">Keep project</button>
           <button type="button" class="rounded-full bg-[#b85e50] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#9f4d42]"
                   @click="confirmDelete">Delete project</button>
+        </div>
+      </div>
+    </div>
+    <div v-if="showLogoutModal" class="fixed inset-0 z-30 grid place-items-center bg-cocoa/30 p-4 backdrop-blur-sm"
+         @click.self="showLogoutModal = false">
+      <div class="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+        <div class="mb-5 flex items-start justify-between">
+          <div>
+            <p class="text-sm font-semibold uppercase tracking-widest text-caramel">Pause the pantry</p>
+            <h2 class="mt-1 font-serif text-3xl font-bold">Log out?</h2>
+          </div>
+          <button type="button" class="rounded-full bg-[#fffaf0] px-3 py-1 text-xl text-stone-500"
+                  @click="showLogoutModal = false">×</button>
+        </div>
+        <p class="text-sm leading-6 text-stone-600">Are you sure you want to log out of your project pantry?</p>
+        <div class="mt-7 flex justify-end gap-3">
+          <button type="button" class="rounded-full px-5 py-2.5 text-sm font-semibold text-stone-500 hover:bg-[#fffaf0]"
+                  @click="showLogoutModal = false">Stay signed in</button>
+          <button type="button" class="rounded-full bg-caramel px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#b57244]"
+                  @click="confirmLogout">Log out</button>
         </div>
       </div>
     </div>

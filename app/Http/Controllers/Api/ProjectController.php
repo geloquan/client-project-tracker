@@ -88,20 +88,24 @@ class ProjectController extends Controller
     {
         $action = $request->validated('action');
 
-        if ($project->status === 'completed' || ($project->status === 'on_hold' && $action === 'on_hold')) {
+        $allowedActions = match ($project->status) {
+            'planned' => ['in_progress', 'on_hold'],
+            'in_progress' => ['complete', 'on_hold'],
+            'on_hold' => ['un_hold'],
+            default => [],
+        };
+
+        if (! in_array($action, $allowedActions, true)) {
             return JsonResponse::error('This project cannot move to that status.', 422);
         }
 
-        if ($action === 'on_hold' && $project->status !== 'in_progress') {
-            return JsonResponse::error('Only in-progress projects can be put on hold.', 422);
-        }
-
-        if ($action === 'complete' && ! in_array($project->status, ['in_progress', 'on_hold'], true)) {
-            return JsonResponse::error('Only active projects can be completed.', 422);
-        }
-
         $project->update([
-            'on_hold_at' => $action === 'on_hold' ? Carbon::now() : $project->on_hold_at,
+            'in_progress_at' => $action === 'in_progress' ? Carbon::now() : $project->in_progress_at,
+            'on_hold_at' => match ($action) {
+                'on_hold' => Carbon::now(),
+                'un_hold' => null,
+                default => $project->on_hold_at,
+            },
             'completed_at' => $action === 'complete' ? Carbon::now() : null,
             'updated_by' => auth()->id(),
         ]);
